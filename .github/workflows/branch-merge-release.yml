@@ -1,0 +1,58 @@
+name: Merge and Release
+# Merges a branch into master and creates a release
+on:
+  workflow_call:
+    inputs:
+      branch:
+        description: Branch to merge
+        required: true
+        type: string
+      tag:
+        description: Exisiting tag to create the release from
+        required: true
+        type: string
+      body:
+        description: Release body
+        type: string
+        required: true
+      base:
+        description: Base branch to merge into (default `master`)
+        required: false
+        type: string
+        default: master
+jobs:
+  merge-release:
+    name: Merge & Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 5
+
+      - name: Rebase & Merge
+        env:
+          BASE: ${{ inputs.base }}
+          BRANCH: ${{ inputs.branch }}
+        run: | 
+          git pull origin $BASE &&
+          git checkout $BASE &&
+          git checkout $BRANCH &&
+          git rebase $BASE &&
+          git checkout $BASE &&
+          git merge "$BRANCH" &&
+          git push
+         
+      - name: Create release on GitHub
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ inputs.tag }}
+          body: ${{ inputs.body }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Delete branch ${{ inputs.branch }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ inputs.branch }}
+        run: gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH"

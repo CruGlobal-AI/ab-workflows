@@ -1,0 +1,75 @@
+name: Cypress E2E Tests
+# Runs our Cypress E2E test suite. Includes setting up AppBuilder using the github reference of the current repository
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: ${{ github.ref }}
+jobs:
+  e2e-tests:
+    name: Cypress E2E Tests
+    runs-on: ubuntu-latest
+    env:
+      CYPRESS_RESPONSE_TIMEOUT: 200000
+      CYPRESS_DEFAULT_COMMAND_TIMEOUT: 30000
+      CYPRESS_RETRIES: 2
+    steps:
+      - name: Get Repo Name
+        id: repo_name
+        run: echo "name=$(basename $GITHUB_REPOSITORY)" >> $GITHUB_OUTPUT
+
+      - name: Checkout Repo
+        uses: actions/checkout@v7
+        with:
+          path: ${{ steps.repo_name.outputs.name }}
+          ref: ${{ inputs.ref }}
+          submodules: recursive
+
+      - name: Install AppBuilder
+        uses: CruGlobal-AI/ab-install-action@v1
+
+      - name: Check out kitchen-sink tests
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository_owner }}/kitchensink_app
+          path: AppBuilder/test/e2e/cypress/e2e/kitchensink_app
+
+      - name: Run AppBuilder
+        # Skipping this step.
+        if: false
+        run: set -a; . ./.env; set +a && docker stack deploy -c docker-compose.yml -c docker-compose.override.yml -c ./test/setup/test-compose.yml ab -d
+        working-directory: ./AppBuilder
+
+      - run: npm install pm2@latest -g
+      - name: Save Logs
+        run: pm2 start ./logs.js -- --toFile logs/ABServices.log
+        working-directory: ./AppBuilder
+
+      - name: Install wait-on module
+        # Skipping this step.
+        if: false
+        run: npm install wait-on -g
+
+      - name: Run wait-on
+        # Skipping this step.
+        if: false
+        run: wait-on http://localhost:80
+
+      - name: Run Cypress Tests
+        run: npm run test:e2e:app -- --browser chrome
+        working-directory: ./AppBuilder
+
+      - name: Save Screenshots 
+        uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: cypress-screenshots
+          path: ./AppBuilder/test/e2e/cypress/screenshots
+          
+      - name: Save Service Logs
+        uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: ABServices.log
+          path: ./AppBuilder/logs/ABServices.log
