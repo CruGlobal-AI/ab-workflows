@@ -83,58 +83,17 @@ jobs:
       CYPRESS_RETRIES: 2
     steps:
       # Runs first so image pulls overlap with everything below.
-      - name: Prepare and pre-pull images
+      - name: Pre-pull images
+        id: prepull
+        uses: CruGlobal-AI/ab-workflows/.github/actions/prepull-images@main
+        with:
+          runtime: ${{ inputs.runtime }}
+
+      - name: Prepare
         id: prep
         env:
-          GH_TOKEN: ${{ github.token }}
-          OWNER: ${{ github.repository_owner }}
-          RUNTIME_REF: ${{ inputs.runtime }}
           INPUT_CHECKOUT_PATH: ${{ inputs.checkout_path }}
-        run: |
-          set -uo pipefail
-          checkout_path="${INPUT_CHECKOUT_PATH:-${GITHUB_REPOSITORY#*/}}"
-          echo "checkout_path=$checkout_path" >> "$GITHUB_OUTPUT"
-
-          # Read a file from ab_runtime at the ref the install will use (fall back to default branch).
-          # (gh prints error bodies on stdout, so only echo output on success)
-          runtime_file() {
-            local out
-            if [ -n "$RUNTIME_REF" ] && out=$(gh api "repos/$OWNER/ab_runtime/contents/$1?ref=$RUNTIME_REF" "${@:2}" 2>/dev/null); then
-              printf '%s' "$out"; return 0
-            fi
-            out=$(gh api "repos/$OWNER/ab_runtime/contents/$1" "${@:2}" 2>/dev/null) && printf '%s' "$out"
-          }
-
-          # Cache key part: blob sha of ab_runtime package-lock.json.
-          lock_sha=$(runtime_file package-lock.json --jq .sha || true)
-          echo "runtime_lock=${lock_sha:-none}" >> "$GITHUB_OUTPUT"
-
-          versions=$(runtime_file version.json -H "Accept: application/vnd.github.raw" || true)
-          if [ -z "$versions" ]; then
-            echo "::warning::Could not read ab_runtime version.json, skipping image pre-pull"
-            exit 0
-          fi
-          registry="ghcr.io/${OWNER,,}"
-          list="$RUNNER_TEMP/prepull-images.txt"
-          {
-            # mcp_server is listed in version.json but not part of the stack
-            jq -r --arg r "$registry" '.services | to_entries[] | select(.key != "mcp_server")
-              | "\($r)/ab-\(.key | gsub("_";"-")):\(.value)"' <<<"$versions"
-            echo "$registry/ab-migration-manager:master"
-            echo "docker.io/library/redis:latest"
-            echo "docker.io/library/nginx:latest"
-          } > "$list"
-          # Two phases: the install needs ab-db + migration-manager first (DB init), the rest only
-          # at stack deploy. Pulling all at once slowed DB init by ~50s in service repos.
-          first="$RUNNER_TEMP/prepull-first.txt"; rest="$RUNNER_TEMP/prepull-rest.txt"
-          grep -E '/ab-(db|migration-manager):' "$list" > "$first" || true
-          grep -vE '/ab-(db|migration-manager):' "$list" > "$rest" || true
-          echo "Pre-pulling in background, first:"; cat "$first"; echo "then:"; cat "$rest"
-          # Best effort: the install pulls anything that failed here.
-          # shellcheck disable=SC2016  # $1 is expanded later by sh -c, on purpose
-          pull='docker pull -q "$1" >/dev/null 2>&1 && echo "ok   $1 ($(date +%T))" || echo "FAIL $1"'
-          nohup bash -c "xargs -P 2 -I{} sh -c '$pull' _ {} < '$first'; xargs -P 4 -I{} sh -c '$pull' _ {} < '$rest'" \
-            > "$RUNNER_TEMP/prepull.log" 2>&1 &
+        run: echo "checkout_path=${INPUT_CHECKOUT_PATH:-${GITHUB_REPOSITORY#*/}}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout Repo
         uses: actions/checkout@v7
@@ -151,9 +110,9 @@ jobs:
             ~/.npm
             ~/.cache/Cypress
             ${{ steps.prep.outputs.checkout_path }}/node_modules/.cache
-          key: ab-e2e-${{ runner.os }}-${{ steps.prep.outputs.runtime_lock }}-${{ hashFiles(format('{0}/package-lock.json', steps.prep.outputs.checkout_path)) }}-${{ matrix.webpack }}
+          key: ab-e2e-${{ runner.os }}-${{ steps.prepull.outputs.runtime_lock }}-${{ hashFiles(format('{0}/package-lock.json', steps.prep.outputs.checkout_path)) }}-${{ matrix.webpack }}
           restore-keys: |
-            ab-e2e-${{ runner.os }}-${{ steps.prep.outputs.runtime_lock }}-
+            ab-e2e-${{ runner.os }}-${{ steps.prepull.outputs.runtime_lock }}-
             ab-e2e-${{ runner.os }}-
 
       # ---- build_web only: webpack this repo into ab_service_web ----

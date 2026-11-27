@@ -1,0 +1,71 @@
+name: Pre-pull AppBuilder images
+description: >
+  Pull every AppBuilder image listed in ab_runtime version.json in the background, so the pulls
+  overlap with checkout / npm i / webpack / DB init. Two phases: ab-db and migration-manager first
+  (DB init needs them), then the rest. Best effort: the install pulls anything that failed.
+  Also outputs the ab_runtime package-lock.json blob sha for cache keys.
+inputs:
+  runtime:
+    description: ab_runtime ref the install will use. Empty = default branch.
+    required: false
+    default: ""
+  token:
+    description: Token to read ab_runtime
+    required: false
+    default: ${{ github.token }}
+outputs:
+  runtime_lock:
+    description: Blob sha of ab_runtime package-lock.json ("none" if unreadable)
+    value: ${{ steps.prepull.outputs.runtime_lock }}
+runs:
+  using: composite
+  steps:
+    - id: prepull
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        OWNER: ${{ github.repository_owner }}
+        RUNTIME_REF: ${{ inputs.runtime }}
+      run: |
+        set -uo pipefail
+
+        # Read a file from ab_runtime at the ref the install will use (fall back to default branch).
+        # (gh prints error bodies on stdout, so only echo output on success)
+        runtime_file() {
+          local out
+          if [ -n "$RUNTIME_REF" ] && out=$(gh api "repos/$OWNER/ab_runtime/contents/$1?ref=$RUNTIME_REF" "${@:2}" 2>/dev/null); then
+            printf '%s' "$out"; return 0
+          fi
+          out=$(gh api "repos/$OWNER/ab_runtime/contents/$1" "${@:2}" 2>/dev/null) && printf '%s' "$out"
+        }
+
+        # Cache key part: blob sha of ab_runtime package-lock.json.
+        lock_sha=$(runtime_file package-lock.json --jq .sha || true)
+        echo "runtime_lock=${lock_sha:-none}" >> "$GITHUB_OUTPUT"
+
+        versions=$(runtime_file version.json -H "Accept: application/vnd.github.raw" || true)
+        if [ -z "$versions" ]; then
+          echo "::warning::Could not read ab_runtime version.json, skipping image pre-pull"
+          exit 0
+        fi
+        registry="ghcr.io/${OWNER,,}"
+        list="$RUNNER_TEMP/prepull-images.txt"
+        {
+          # mcp_server is listed in version.json but not part of the stack
+          jq -r --arg r "$registry" '.services | to_entries[] | select(.key != "mcp_server")
+            | "\($r)/ab-\(.key | gsub("_";"-")):\(.value)"' <<<"$versions"
+          echo "$registry/ab-migration-manager:master"
+          echo "docker.io/library/redis:latest"
+          echo "docker.io/library/nginx:latest"
+        } > "$list"
+        # Two phases: the install needs ab-db + migration-manager first (DB init), the rest only
+        # at stack deploy. Pulling all at once slowed DB init by ~50s in service repos.
+        first="$RUNNER_TEMP/prepull-first.txt"; rest="$RUNNER_TEMP/prepull-rest.txt"
+        grep -E '/ab-(db|migration-manager):' "$list" > "$first" || true
+        grep -vE '/ab-(db|migration-manager):' "$list" > "$rest" || true
+        echo "Pre-pulling in background, first:"; cat "$first"; echo "then:"; cat "$rest"
+        # Best effort: the install pulls anything that failed here.
+        # shellcheck disable=SC2016  # $1 is expanded later by sh -c, on purpose
+        pull='docker pull -q "$1" >/dev/null 2>&1 && echo "ok   $1 ($(date +%T))" || echo "FAIL $1"'
+        nohup bash -c "xargs -P 2 -I{} sh -c '$pull' _ {} < '$first'; xargs -P 4 -I{} sh -c '$pull' _ {} < '$rest'" \
+          > "$RUNNER_TEMP/prepull.log" 2>&1 &
