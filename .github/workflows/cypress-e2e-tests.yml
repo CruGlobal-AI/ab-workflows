@@ -193,8 +193,9 @@ jobs:
       # ---- end build_web ----
 
       - name: Install AppBuilder
-        uses: CruGlobal-AI/ab-install-action@v1
+        uses: CruGlobal-AI/ab-install-action@feat/skip-main-db
         with:
+          ab_cli: CruGlobal-AI/ab-cli#feat/skip-main-db
           folder: ${{ inputs.folder }}
           port: ${{ inputs.port }}
           runtime: ${{ inputs.runtime }}
