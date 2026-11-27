@@ -85,7 +85,7 @@ jobs:
       # Runs first so image pulls overlap with everything below.
       - name: Pre-pull images
         id: prepull
-        uses: CruGlobal-AI/ab-workflows/.github/actions/prepull-images@prepull-action
+        uses: CruGlobal-AI/ab-workflows/.github/actions/prepull-images@main
         with:
           runtime: ${{ inputs.runtime }}
 
