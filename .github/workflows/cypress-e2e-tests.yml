@@ -229,11 +229,19 @@ jobs:
             [ $SECONDS -ge $deadline ] && { echo "::error::sails not up after 300s"; docker service ls; exit 1; }
             sleep 2
           done
-          until [ "$(curl -s -o /dev/null -w '%{http_code}' "$CYPRESS_BASE_URL")" = "200" ]; do
-            [ $SECONDS -ge $deadline ] && { echo "::error::$CYPRESS_BASE_URL not answering after 300s"; docker service ls; exit 1; }
-            sleep 2
+          echo "sails up after ${SECONDS}s, checking $CYPRESS_BASE_URL"
+          # --max-time: nginx can accept the connection and never answer while services boot.
+          # Not fatal: Cypress has its own timeouts, and the old flow had no web check.
+          while :; do
+            code=$(curl -s -o /dev/null --max-time 5 -w '%{http_code}' "$CYPRESS_BASE_URL" || true)
+            case "$code" in 2??|3??) echo "web answered $code after ${SECONDS}s"; break ;; esac
+            if [ $SECONDS -ge $deadline ]; then
+              echo "::warning::$CYPRESS_BASE_URL still not answering (last code: $code), running Cypress anyway"
+              break
+            fi
+            echo "web: ${code:-none}, waiting"
+            sleep 3
           done
-          echo "AppBuilder ready after ${SECONDS}s"
           docker service ls
 
       - name: Run Cypress Tests
