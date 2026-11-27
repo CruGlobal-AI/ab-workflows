@@ -48,6 +48,10 @@ on:
         description: GitHub App ID / client ID used to read ab_service_web (only used with build_web). Empty = GITHUB_TOKEN.
         type: string
         default: ""
+      kitchensink_ref:
+        description: kitchensink_app ref to test with (kitchensink_app passes its own ref). Empty = default branch.
+        type: string
+        default: ""
       timeout_minutes:
         description: Job timeout
         type: number
@@ -211,6 +215,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: ${{ github.repository_owner }}/kitchensink_app
+          ref: ${{ inputs.kitchensink_ref }}
           path: ${{ inputs.folder }}/test/e2e/cypress/e2e/kitchensink_app
 
       - name: Save Logs
