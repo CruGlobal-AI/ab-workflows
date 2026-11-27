@@ -213,7 +213,7 @@ jobs:
         working-directory: ${{ inputs.folder }}
 
       # ab-install-action only deploys the stack for ab_service_* repos. Deploy it here otherwise,
-      # then wait until sails and the web UI answer (replaces fixed sleeps).
+      # then wait until sails is 1/1 (replaces fixed sleeps).
       - name: Wait for AppBuilder
         working-directory: ${{ inputs.folder }}
         run: |
@@ -229,19 +229,9 @@ jobs:
             [ $SECONDS -ge $deadline ] && { echo "::error::sails not up after 300s"; docker service ls; exit 1; }
             sleep 2
           done
-          echo "sails up after ${SECONDS}s, checking $CYPRESS_BASE_URL"
-          # --max-time: nginx can accept the connection and never answer while services boot.
-          # Not fatal: Cypress has its own timeouts, and the old flow had no web check.
-          while :; do
-            code=$(curl -s -o /dev/null --max-time 5 -w '%{http_code}' "$CYPRESS_BASE_URL" || true)
-            case "$code" in 2??|3??) echo "web answered $code after ${SECONDS}s"; break ;; esac
-            if [ $SECONDS -ge $deadline ]; then
-              echo "::warning::$CYPRESS_BASE_URL still not answering (last code: $code), running Cypress anyway"
-              break
-            fi
-            echo "web: ${code:-none}, waiting"
-            sleep 3
-          done
+          # No HTTP check on purpose: curl to $CYPRESS_BASE_URL times out on the runner even when
+          # Cypress reaches the app fine, so it only burned the full deadline. Cypress waits on its own.
+          echo "sails up after ${SECONDS}s"
           docker service ls
 
       - name: Run Cypress Tests
