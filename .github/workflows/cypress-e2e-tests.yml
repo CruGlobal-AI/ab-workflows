@@ -120,10 +120,17 @@ jobs:
             echo "docker.io/library/redis:latest"
             echo "docker.io/library/nginx:latest"
           } > "$list"
-          echo "Pre-pulling in background:"; cat "$list"
+          # Two phases: the install needs ab-db + migration-manager first (DB init), the rest only
+          # at stack deploy. Pulling all at once slowed DB init by ~50s in service repos.
+          first="$RUNNER_TEMP/prepull-first.txt"; rest="$RUNNER_TEMP/prepull-rest.txt"
+          grep -E '/ab-(db|migration-manager):' "$list" > "$first" || true
+          grep -vE '/ab-(db|migration-manager):' "$list" > "$rest" || true
+          echo "Pre-pulling in background, first:"; cat "$first"; echo "then:"; cat "$rest"
           # Best effort: the install pulls anything that failed here.
-          nohup xargs -P 6 -I{} sh -c 'docker pull -q {} >/dev/null 2>&1 && echo "ok   {}" || echo "FAIL {}"' \
-            < "$list" > "$RUNNER_TEMP/prepull.log" 2>&1 &
+          # shellcheck disable=SC2016  # $1 is expanded later by sh -c, on purpose
+          pull='docker pull -q "$1" >/dev/null 2>&1 && echo "ok   $1 ($(date +%T))" || echo "FAIL $1"'
+          nohup bash -c "xargs -P 2 -I{} sh -c '$pull' _ {} < '$first'; xargs -P 4 -I{} sh -c '$pull' _ {} < '$rest'" \
+            > "$RUNNER_TEMP/prepull.log" 2>&1 &
 
       - name: Checkout Repo
         uses: actions/checkout@v7
